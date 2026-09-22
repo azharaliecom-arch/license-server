@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-DATA_FILE = Path("license_data.json")
+DATA_FILE = Path("/data/license_data.json")
 
 # ZAROORI: Ye password badal dein — sirf AAP ko pata hona chahiye.
 ADMIN_PASSWORD = "Azhar$$7862"
