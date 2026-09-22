@@ -12,6 +12,8 @@ app = Flask(__name__)
 
 DATA_FILE = Path("/data/license_data.json")
 
+# persistence test
+
 # ZAROORI: Ye password badal dein — sirf AAP ko pata hona chahiye.
 ADMIN_PASSWORD = "Azhar$$7862"
 
