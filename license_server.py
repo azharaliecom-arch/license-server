@@ -13,7 +13,7 @@ app = Flask(__name__)
 DATA_FILE = Path("license_data.json")
 
 # ZAROORI: Ye password badal dein — sirf AAP ko pata hona chahiye.
-ADMIN_PASSWORD = "change_this_password_123"
+ADMIN_PASSWORD = "Azhar$$78621"
 
 ONLINE_THRESHOLD_MINUTES = 1.5  # Itni der tak "heartbeat" na aaye to "offline" maanenge
 
