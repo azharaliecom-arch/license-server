@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-DATA_FILE = Path("license_data.json")
+DATA_FILE = Path("/data/license_data.json")
 
 # ZAROORI: Ye password badal dein — sirf AAP ko pata hona chahiye.
 ADMIN_PASSWORD = "Azhar$$78621"
@@ -43,6 +43,28 @@ def _is_online(last_seen_str):
         return False
 
 
+def _format_duration(from_str):
+    """'5 minute', '2 ghante 15 minute' jaisi, Roman-Urdu mein, saaf
+    duration banata hai — kisi bhi waqt se ABHI TAK ka farq."""
+    try:
+        from_dt = datetime.fromisoformat(from_str)
+    except Exception:
+        return "-"
+    seconds = int((datetime.now() - from_dt).total_seconds())
+    if seconds < 0:
+        seconds = 0
+    minutes = seconds // 60
+    hours = minutes // 60
+    days = hours // 24
+    if days >= 1:
+        return f"{days} din"
+    if hours >= 1:
+        return f"{hours} ghante {minutes % 60} minute"
+    if minutes >= 1:
+        return f"{minutes} minute"
+    return "abhi abhi"
+
+
 # ---------------------------------------------------------------------------
 # MACHINE-LOCK (manzoori)
 # ---------------------------------------------------------------------------
@@ -56,6 +78,12 @@ def check_activation():
         return jsonify({"status": "error", "message": "Fingerprint missing"}), 400
 
     data = _load_data()
+
+    # ZAROORI: Agar admin ne is banday ki "Access Deny" ki hui hai, tool
+    # ko yahin, shuru mein hi, rok dete hain — chahe pehle "approved" ho.
+    if data["users"].get(fingerprint, {}).get("blocked"):
+        return jsonify({"status": "blocked"})
+
     existing = next((r for r in data["requests"] if r["fingerprint"] == fingerprint), None)
 
     if existing:
@@ -89,6 +117,13 @@ def heartbeat():
     user = data["users"].setdefault(fingerprint, {
         "name": "Unnamed", "video_count": 0, "last_seen": "", "activity": "", "badges": [],
     })
+    # ZAROORI: "kitni der se ONLINE hai" ka hisaab rakhne ke liye — agar
+    # pehle OFFLINE tha (ya pehli dafa hai), "online_since" ko ABHI SET
+    # karte hain. Agar pehle se hi ONLINE tha, ise NAHI badalte — taake
+    # "lagatar kitni der se online hai" sahi rahe.
+    was_online = _is_online(user.get("last_seen", ""))
+    if not was_online:
+        user["online_since"] = datetime.now().isoformat(timespec="seconds")
     user["last_seen"] = datetime.now().isoformat(timespec="seconds")
     user["activity"] = activity
     _save_data(data)
@@ -190,7 +225,18 @@ def admin_dashboard():
     user_rows = ""
     for fp, u in sorted(data["users"].items(), key=lambda x: -x[1].get("video_count", 0)):
         online = _is_online(u.get("last_seen", ""))
-        status_txt = "🟢 Online" if online else "⚪ Offline"
+        blocked = u.get("blocked", False)
+        if blocked:
+            status_txt = "🚫 Access Band"
+        elif online:
+            status_txt = f"🟢 Online ({_format_duration(u.get('online_since', u.get('last_seen', '')))} se)"
+        else:
+            status_txt = f"⚪ Offline ({_format_duration(u.get('last_seen', ''))} se)"
+        access_btn = (
+            f"<button onclick=\"toggleAccessConfirm('{fp}', true)\" style='background:#2bd36d;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px'>✅ Access De Dein</button>"
+            if blocked else
+            f"<button onclick=\"toggleAccessConfirm('{fp}', false)\" style='background:#e84f9b;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px'>🚫 Access Deny</button>"
+        )
         user_rows += f"""
         <tr>
           <td>{u.get('name', 'Unnamed')} <span style="font-size:10px;color:#929bb0">({u.get('machine_name', 'Unknown')})</span></td>
@@ -198,7 +244,10 @@ def admin_dashboard():
           <td>{u.get('activity', '-') if online else '-'}</td>
           <td>{u.get('video_count', 0)}</td>
           <td>{len(u.get('badges', []))} 🏆</td>
-          <td><button onclick="renamePrompt('{fp}')" style='background:#293145;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px'>✏️ Naam Badlein</button></td>
+          <td style="white-space:nowrap">
+            <button onclick="renamePrompt('{fp}')" style='background:#293145;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;margin-right:4px'>✏️ Naam Badlein</button>
+            {access_btn}
+          </td>
         </tr>"""
 
     def _label_for(e):
@@ -275,6 +324,14 @@ def admin_dashboard():
             window.location = '/admin/rename?fp=' + fp + '&password={password}&name=' + encodeURIComponent(newName);
           }}
         }}
+        function toggleAccessConfirm(fp, currentlyBlocked) {{
+          const msg = currentlyBlocked
+            ? 'Kya aap is banday ko dobara access DENA chahte hain?'
+            : 'Kya aap is banday ki access BAND karna chahte hain? Agli dafa tool chalane par, ruk jayega.';
+          if (confirm(msg)) {{
+            window.location = '/admin/toggle_access?fp=' + fp + '&password={password}';
+          }}
+        }}
         async function saveAnnouncement(e) {{
           e.preventDefault();
           await fetch('/admin/set_announcement?password={password}', {{
@@ -340,6 +397,21 @@ def admin_rename():
     data = _load_data()
     if fp in data["users"]:
         data["users"][fp]["name"] = new_name
+        _save_data(data)
+    return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
+
+
+@app.route("/admin/toggle_access")
+def admin_toggle_access():
+    """Kisi bhi banday ki access, ek click se, band ya wapas de sakte
+    hain. Band karne par, us banday ka tool, AGLI DAFA CHALANE PAR,
+    khud, "access band hai" dikha kar ruk jayega."""
+    if request.args.get("password", "") != ADMIN_PASSWORD:
+        return "Ghalat password", 403
+    fp = request.args.get("fp", "")
+    data = _load_data()
+    if fp in data["users"]:
+        data["users"][fp]["blocked"] = not data["users"][fp].get("blocked", False)
         _save_data(data)
     return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
 
