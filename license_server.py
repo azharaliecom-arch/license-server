@@ -10,15 +10,12 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-DATA_FILE = Path("/data/license_data.json")
-
-# test 2
-# persistence test
+DATA_FILE = Path("license_data.json")
 
 # ZAROORI: Ye password badal dein — sirf AAP ko pata hona chahiye.
-ADMIN_PASSWORD = "Azhar$$7862"
+ADMIN_PASSWORD = "change_this_password_123"
 
-ONLINE_THRESHOLD_MINUTES = 5  # Itni der tak "heartbeat" na aaye to "offline" maanenge
+ONLINE_THRESHOLD_MINUTES = 1.5  # Itni der tak "heartbeat" na aaye to "offline" maanenge
 
 BADGE_MILESTONES = [10, 25, 50, 100, 250, 500]
 
@@ -153,7 +150,7 @@ def report_error():
     payload = request.get_json(force=True)
     data = _load_data()
     data["error_reports"].insert(0, {
-        "fingerprint": payload.get("fingerprint", "")[:20],
+        "fingerprint": payload.get("fingerprint", ""),
         "machine_name": payload.get("machine_name", "Unknown"),
         "error_summary": payload.get("error_summary", "")[:300],
         "reported_at": datetime.now().isoformat(timespec="seconds"),
@@ -196,7 +193,7 @@ def admin_dashboard():
         status_txt = "🟢 Online" if online else "⚪ Offline"
         user_rows += f"""
         <tr>
-          <td>{u.get('name', 'Unnamed')}</td>
+          <td>{u.get('name', 'Unnamed')} <span style="font-size:10px;color:#929bb0">({u.get('machine_name', 'Unknown')})</span></td>
           <td>{status_txt}</td>
           <td>{u.get('activity', '-') if online else '-'}</td>
           <td>{u.get('video_count', 0)}</td>
@@ -204,8 +201,17 @@ def admin_dashboard():
           <td><button onclick="renamePrompt('{fp}')" style='background:#293145;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px'>✏️ Naam Badlein</button></td>
         </tr>"""
 
+    def _label_for(e):
+        # Fingerprint se, us banday ka NAAM dhoondte hain (agar maloom ho) —
+        # taake sirf "DESKTOP-XXXX" na dikhe, balke "MANGU (DESKTOP-XXXX)"
+        # jaisa, pehchan-ne-laayak naam dikhe.
+        u = data["users"].get(e.get("fingerprint", ""))
+        if u and u.get("name") and u["name"] != "Unnamed":
+            return f"{u['name']} ({e['machine_name']})"
+        return e["machine_name"]
+
     error_rows = "".join(f"""
-        <tr><td>{e['machine_name']}</td><td>{e['error_summary']}</td><td>{e['reported_at']}</td></tr>
+        <tr><td>{_label_for(e)}</td><td>{e['error_summary']}</td><td>{e['reported_at']}</td></tr>
     """ for e in data["error_reports"][:20])
 
     ann = data.get("announcement", {})
@@ -247,6 +253,8 @@ def admin_dashboard():
         <input id="annVersion" value="{ann.get('version','1.0')}">
         <label style="margin-top:10px;display:block">Download URL (naye update ke liye)</label>
         <input id="annDownload" value="{ann.get('download_url','')}">
+        <label style="margin-top:10px;display:block">📰 Chalti Hui Patti (Ticker) — Khaali Chhodein Agar Nahi Chahiye</label>
+        <input id="annTicker" value="{ann.get('ticker_text','')}" placeholder="Jaise: Naya update jald aa raha hai! Sabhi videos ki quality behtar ho gayi hai!">
         <button type="submit" class="save-btn">Save aur Sab Ko Bhejein</button>
       </form>
 
@@ -277,6 +285,7 @@ def admin_dashboard():
               body: document.getElementById('annBody').value,
               version: document.getElementById('annVersion').value,
               download_url: document.getElementById('annDownload').value,
+              ticker_text: document.getElementById('annTicker').value,
             }})
           }});
           alert('Save ho gaya!');
@@ -294,12 +303,15 @@ def admin_approve():
     fp = request.args.get("fp", "")
     name = request.args.get("name", "Unnamed")
     data = _load_data()
+    machine_name = "Unknown"
     for r in data["requests"]:
         if r["fingerprint"] == fp:
             r["status"] = "approved"
             r["approved_at"] = datetime.now().isoformat(timespec="seconds")
-    data["users"].setdefault(fp, {"name": name, "video_count": 0, "last_seen": "", "activity": "", "badges": []})
+            machine_name = r.get("machine_name", "Unknown")
+    data["users"].setdefault(fp, {"name": name, "machine_name": machine_name, "video_count": 0, "last_seen": "", "activity": "", "badges": []})
     data["users"][fp]["name"] = name
+    data["users"][fp]["machine_name"] = machine_name
     _save_data(data)
     return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
 
@@ -343,6 +355,7 @@ def admin_set_announcement():
         "body": payload.get("body", ""),
         "version": payload.get("version", "1.0"),
         "download_url": payload.get("download_url", ""),
+        "ticker_text": payload.get("ticker_text", ""),
     }
     data["announcement"] = new_ann
     # ZAROORI: Changelog mein bhi save kar dete hain — poori history rahe.
