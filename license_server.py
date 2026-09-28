@@ -452,6 +452,128 @@ def home():
     return "License server chal raha hai."
 
 
+# ---------------------------------------------------------------------------
+# FEATURE-LOCK (global on/off per feature, with per-machine exceptions)
+# ---------------------------------------------------------------------------
+# NAYA HISSA — is se UPAR ki koi bhi cheez (koi bhi existing route,
+# function, ya data-handling) BILKUL NAHI CHHEDI GAYI. Ye sirf ek ALAG,
+# khud-mukhtar (self-contained) naya data-key "feature_locks" istemal
+# karta hai, jo maujooda /data/license_data.json mein PEHLE kabhi
+# maujood nahi tha — is liye purane users/requests/announcement/
+# error_reports/changelog data par iska koi asar nahi parta, na unhein
+# padhte waqt na likhte waqt. Agar ye naya data-key file mein maujood na
+# ho (purani file), `.setdefault(...)` khud-b-khud khaali `{}` bana deta
+# hai — kabhi crash ya kisi maujooda cheez ka nuksan nahi hota.
+#
+# Data shape: data["feature_locks"] = {
+#     "<feature_name>": {
+#         "locked": true/false,
+#         "allowed_fingerprints": ["<fp1>", "<fp2>", ...]
+#     },
+#     ...
+# }
+# Koi feature yahan list na ho (ya "locked": false ho) to HAMESHA
+# "locked": false wapas aata hai — fail-open, taake kabhi ghalti se
+# (missing/misconfigured data ki wajah se) kisi ko galat block na ho.
+
+@app.route("/api/check_feature_lock", methods=["POST"])
+def check_feature_lock():
+    """Client (tool) ye call kare, kisi feature ka istemal karne se
+    PEHLE — {"fingerprint": ..., "feature": "<naam>"} bhej kar. Response:
+    {"locked": true} = ye banda is feature ko istemal NAHI kar sakta.
+    {"locked": false} = istemal kar sakta hai (ya feature locked hi nahi,
+    ya is fingerprint ko exception mili hui hai)."""
+    payload = request.get_json(force=True)
+    fingerprint = payload.get("fingerprint", "").strip()
+    feature = payload.get("feature", "").strip()
+    if not feature:
+        return jsonify({"locked": False})
+
+    data = _load_data()
+    lock_info = data.get("feature_locks", {}).get(feature)
+    if not lock_info or not lock_info.get("locked"):
+        return jsonify({"locked": False})
+
+    allowed = lock_info.get("allowed_fingerprints", [])
+    if fingerprint and fingerprint in allowed:
+        return jsonify({"locked": False})
+
+    return jsonify({"locked": True})
+
+
+@app.route("/admin/feature_locks_status")
+def admin_feature_locks_status():
+    """Sab feature-locks ki maujooda halat dekhne ke liye (JSON) — URL
+    mein ?password=... ke sath."""
+    if request.args.get("password", "") != ADMIN_PASSWORD:
+        return jsonify({"error": "Ghalat password"}), 403
+    data = _load_data()
+    return jsonify({"feature_locks": data.get("feature_locks", {})})
+
+
+@app.route("/admin/toggle_feature_lock")
+def admin_toggle_feature_lock():
+    """Kisi feature ko LOCK ya UNLOCK karne ke liye — ek hi URL, jo
+    maujooda halat ko ULTA (toggle) kar deta hai. Feature pehli dafa
+    lock ho raha ho to khud-b-khud (locked=True, khaali allowed-list ke
+    sath) ban jata hai.
+    URL: /admin/toggle_feature_lock?feature=<naam>&password=..."""
+    if request.args.get("password", "") != ADMIN_PASSWORD:
+        return "Ghalat password", 403
+    feature = request.args.get("feature", "").strip()
+    if not feature:
+        return "Feature ka naam zaroori hai (?feature=...)", 400
+    data = _load_data()
+    locks = data.setdefault("feature_locks", {})
+    entry = locks.setdefault(feature, {"locked": False, "allowed_fingerprints": []})
+    entry["locked"] = not entry.get("locked", False)
+    _save_data(data)
+    return jsonify({"ok": True, "feature": feature, "locked": entry["locked"]})
+
+
+@app.route("/admin/add_feature_exception")
+def admin_add_feature_exception():
+    """Kisi LOCKED feature mein, ek khaas fingerprint ko ISTISNA
+    (exception) dena — wo banda us feature ko istemal kar sakega, baaki
+    sab nahi.
+    URL: /admin/add_feature_exception?feature=<naam>&fp=<fingerprint>&password=..."""
+    if request.args.get("password", "") != ADMIN_PASSWORD:
+        return "Ghalat password", 403
+    feature = request.args.get("feature", "").strip()
+    fp = request.args.get("fp", "").strip()
+    if not feature or not fp:
+        return "feature aur fp dono zaroori hain", 400
+    data = _load_data()
+    locks = data.setdefault("feature_locks", {})
+    entry = locks.setdefault(feature, {"locked": False, "allowed_fingerprints": []})
+    allowed = entry.setdefault("allowed_fingerprints", [])
+    if fp not in allowed:
+        allowed.append(fp)
+    _save_data(data)
+    return jsonify({"ok": True, "feature": feature, "allowed_fingerprints": allowed})
+
+
+@app.route("/admin/remove_feature_exception")
+def admin_remove_feature_exception():
+    """Kisi feature se, pehle di hui exception wapas lena.
+    URL: /admin/remove_feature_exception?feature=<naam>&fp=<fingerprint>&password=..."""
+    if request.args.get("password", "") != ADMIN_PASSWORD:
+        return "Ghalat password", 403
+    feature = request.args.get("feature", "").strip()
+    fp = request.args.get("fp", "").strip()
+    data = _load_data()
+    locks = data.setdefault("feature_locks", {})
+    entry = locks.get(feature)
+    if entry and fp in entry.get("allowed_fingerprints", []):
+        entry["allowed_fingerprints"].remove(fp)
+        _save_data(data)
+    return jsonify({
+        "ok": True,
+        "feature": feature,
+        "allowed_fingerprints": entry.get("allowed_fingerprints", []) if entry else [],
+    })
+
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5555))
