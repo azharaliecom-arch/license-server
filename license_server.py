@@ -265,6 +265,34 @@ def admin_dashboard():
 
     ann = data.get("announcement", {})
 
+    feature_locks = data.get("feature_locks", {})
+    feature_lock_rows = ""
+    for fname, finfo in sorted(feature_locks.items()):
+        locked = finfo.get("locked", False)
+        allowed = finfo.get("allowed_fingerprints", [])
+        status_txt = "🔴 LOCKED" if locked else "🟢 Khula Hai"
+        status_color = "#e84f9b" if locked else "#2bd36d"
+        toggle_label = "🔓 Unlock Karein" if locked else "🔒 Lock Karein"
+        toggle_color = "#2bd36d" if locked else "#e84f9b"
+        if allowed:
+            allowed_html = "<br>".join(
+                f"<span style='font-size:11px'>{_label_for({'fingerprint': fp, 'machine_name': fp[:16] + '...'})} "
+                f"<a href='#' onclick=\"removeException('{fname}','{fp}');return false;\" style='color:#e84f9b;text-decoration:none'>✕</a></span>"
+                for fp in allowed
+            )
+        else:
+            allowed_html = "<span style='font-size:11px;color:#929bb0'>Koi nahi</span>"
+        feature_lock_rows += f"""
+        <tr>
+          <td>{fname}</td>
+          <td style="color:{status_color};font-weight:bold">{status_txt}</td>
+          <td>{allowed_html}</td>
+          <td style="white-space:nowrap">
+            <button onclick="toggleFeatureLock('{fname}')" style='background:{toggle_color};color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;margin-right:4px'>{toggle_label}</button>
+            <button onclick="addExceptionPrompt('{fname}')" style='background:#293145;color:white;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px'>➕ Istisna Dein</button>
+          </td>
+        </tr>"""
+
     html = f"""
     <html><head><title>Admin Dashboard</title>
     <style>
@@ -313,6 +341,21 @@ def admin_dashboard():
         {error_rows if error_rows else "<tr><td colspan='3'>Koi error report nahi.</td></tr>"}
       </table>
 
+      <h2>🔒 Feature-Lock (Koi Feature Band/Chalu Karein)</h2>
+      <p style="color:#929bb0;font-size:12px;margin-top:-10px">
+        Kisi feature ko yahan se LOCK kar dein to, jis kisi ke paas istisna
+        (exception) nahi hai, uska tool wo feature istemal NAHI kar sakega.
+      </p>
+      <table>
+        <tr><th>Feature Naam</th><th>Status</th><th>Istisna Wale (Exceptions)</th><th>Kaam</th></tr>
+        {feature_lock_rows if feature_lock_rows else "<tr><td colspan='4'>Abhi koi feature lock nahi hai.</td></tr>"}
+      </table>
+      <form onsubmit="addNewFeatureLock(event)">
+        <label>Naya Feature Lock Karein (naam likhein, jaise: avatar_explainer)</label>
+        <input id="newFeatureName" placeholder="feature ka naam">
+        <button type="submit" class="save-btn" style="background:#e84f9b">🔒 Is Naam Se Lock Karein</button>
+      </form>
+
       <script>
         function approveWithName(fp) {{
           const name = document.getElementById('name_' + fp).value || 'Unnamed';
@@ -346,6 +389,29 @@ def admin_dashboard():
             }})
           }});
           alert('Save ho gaya!');
+        }}
+        function toggleFeatureLock(feature) {{
+          const msg = 'Kya aap "' + feature + '" feature ki lock-status badalna chahte hain?';
+          if (confirm(msg)) {{
+            window.location = '/admin/toggle_feature_lock?feature=' + encodeURIComponent(feature) + '&password={password}';
+          }}
+        }}
+        function addNewFeatureLock(e) {{
+          e.preventDefault();
+          const name = document.getElementById('newFeatureName').value.trim();
+          if (!name) return;
+          window.location = '/admin/toggle_feature_lock?feature=' + encodeURIComponent(name) + '&password={password}';
+        }}
+        function addExceptionPrompt(feature) {{
+          const fp = prompt('Us laptop ki poori fingerprint paste karein (jise istisna deni hai):');
+          if (fp) {{
+            window.location = '/admin/add_feature_exception?feature=' + encodeURIComponent(feature) + '&fp=' + encodeURIComponent(fp.trim()) + '&password={password}';
+          }}
+        }}
+        function removeException(feature, fp) {{
+          if (confirm('Is laptop ki istisna hatayein?')) {{
+            window.location = '/admin/remove_feature_exception?feature=' + encodeURIComponent(feature) + '&fp=' + encodeURIComponent(fp) + '&password={password}';
+          }}
         }}
       </script>
     </body></html>
@@ -528,7 +594,7 @@ def admin_toggle_feature_lock():
     entry = locks.setdefault(feature, {"locked": False, "allowed_fingerprints": []})
     entry["locked"] = not entry.get("locked", False)
     _save_data(data)
-    return jsonify({"ok": True, "feature": feature, "locked": entry["locked"]})
+    return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
 
 
 @app.route("/admin/add_feature_exception")
@@ -550,7 +616,7 @@ def admin_add_feature_exception():
     if fp not in allowed:
         allowed.append(fp)
     _save_data(data)
-    return jsonify({"ok": True, "feature": feature, "allowed_fingerprints": allowed})
+    return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
 
 
 @app.route("/admin/remove_feature_exception")
@@ -567,11 +633,7 @@ def admin_remove_feature_exception():
     if entry and fp in entry.get("allowed_fingerprints", []):
         entry["allowed_fingerprints"].remove(fp)
         _save_data(data)
-    return jsonify({
-        "ok": True,
-        "feature": feature,
-        "allowed_fingerprints": entry.get("allowed_fingerprints", []) if entry else [],
-    })
+    return f"<script>window.location='/admin?password={request.args.get('password','')}'</script>"
 
 
 if __name__ == "__main__":
