@@ -26,7 +26,14 @@ BACKUP_DIR = DATA_FILE.parent / "backups"
 
 # ZAROORI: Behtar ye hai ke password Render ki "Environment" mein
 # ADMIN_PASSWORD naam se rakhein (code mein nahi). Wahan na ho to ye wala chalega.
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") or "Azhar$$78621"
+def _clean_pw(v):
+    v = (v or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()           # galti se quotes ke sath likha ho
+    return v
+
+
+ADMIN_PASSWORD = _clean_pw(os.environ.get("ADMIN_PASSWORD")) or "Azhar$$78621"
 
 ONLINE_THRESHOLD_MINUTES = 1.5  # Itni der tak "heartbeat" na aaye to "offline" maanenge
 
@@ -352,7 +359,7 @@ def _api_guard():
 @app.route("/admin", methods=["GET", "POST"])
 def admin_dashboard():
     if request.method == "POST":
-        pw = request.form.get("password", "")
+        pw = _clean_pw(request.form.get("password", ""))
         if hmac.compare_digest(pw, ADMIN_PASSWORD):
             return _set_login_cookie(redirect("/admin"))
         return Response(LOGIN_HTML.replace("{{ERR}}", "❌ Ghalat password"), mimetype="text/html")
